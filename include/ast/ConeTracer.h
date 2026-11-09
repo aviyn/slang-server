@@ -9,7 +9,9 @@
 
 #include "util/ScopedRestore.h"
 #include <functional>
+#include <map>
 #include <set>
+#include <vector>
 
 #include "slang/ast/ASTVisitor.h"
 #include "slang/ast/Expression.h"
@@ -61,31 +63,61 @@ private:
     const slang::ast::Symbol* symbol;
 };
 
+/// How a signal takes part in the connection a cone edge was found on.
+enum class ConeSiteKind {
+    /// Read as a value in the connecting assignment.
+    Data,
+    /// Decides whether the connecting assignment executes.
+    Control,
+    /// Connected through an instance's port map.
+    Port,
+};
+
+/// Where a cone edge is made in the source: the use of the signal being traced from, in the
+/// assignment or port connection that links it to the other end.
+struct ConeSite {
+    slang::SourceRange range;
+    ConeSiteKind kind;
+
+    bool operator<(const ConeSite& other) const {
+        if (auto order = range.start() <=> other.range.start(); order != 0) {
+            return order < 0;
+        }
+        if (auto order = range.end() <=> other.range.end(); order != 0) {
+            return order < 0;
+        }
+        return kind < other.kind;
+    }
+};
+
+/// Every signal in a cone, with the places it connects to the root.
+using ConeLeaves = std::map<ConeLeaf, std::set<ConeSite>>;
+
 template<typename TDerived>
 struct ConeTracer : public slang::ast::ASTVisitor<TDerived, slang::ast::VisitFlags::AllGood> {
 protected:
     const slang::ast::Symbol* root;
 
-    void addLeaf(const ConeLeaf& leaf) {
+    void addLeaf(const ConeLeaf& leaf, const ConeSite& site) {
         if (!leaf.isParameter()) {
-            leaves.insert(leaf);
+            leaves[leaf].insert(site);
         }
     }
 
 private:
     ConeTracer(const slang::ast::Symbol* root) : root(ConeLeaf::concreteSymbol(root)) {}
 
-    std::set<ConeLeaf> leaves;
+    ConeLeaves leaves;
 
 public:
-    std::set<ConeLeaf> getLeaves() { return leaves; }
+    ConeLeaves getLeaves() { return leaves; }
     friend TDerived;
 };
 
 struct DriversTracer : public ConeTracer<DriversTracer> {
 private:
-    // Signals that control whether the current assignment executes.
-    std::set<ConeLeaf> conditionDrivers;
+    // Signals that control whether the current assignment executes, and where they are read.
+    ConeLeaves conditionDrivers;
 
     // Whether the current expression is an assignment target.
     bool isLhs = false;
@@ -93,6 +125,11 @@ private:
     bool isDriven = false;
     // Whether visited value expressions control which assignments execute.
     bool inCondition = false;
+    // Whether visited value expressions are the connection of an input port.
+    bool inPortConnection = false;
+
+    // Where the current assignment writes the root.
+    slang::SourceRange rootRange;
 
     const slang::ast::PortSymbol* portSymbol = nullptr;
 
@@ -100,12 +137,14 @@ public:
     void handle(const slang::ast::ValueExpressionBase& symbol) {
         if (isLhs && ConeLeaf::concreteSymbol(&symbol.symbol) == root) {
             isDriven = true;
+            rootRange = symbol.sourceRange;
         }
         else if (!isLhs && isDriven) {
-            addLeaf(&symbol);
+            addLeaf(&symbol, {symbol.sourceRange,
+                              inPortConnection ? ConeSiteKind::Port : ConeSiteKind::Data});
         }
         if (inCondition) {
-            conditionDrivers.insert(&symbol);
+            conditionDrivers[&symbol].insert({symbol.sourceRange, ConeSiteKind::Control});
         }
     }
 
@@ -118,10 +157,12 @@ public:
         if (isDriven) {
             expr.right().visit(*this);
             if (portSymbol) {
-                addLeaf(portSymbol);
+                addLeaf(portSymbol, {rootRange, ConeSiteKind::Port});
             }
-            for (const auto& driver : conditionDrivers) {
-                addLeaf(driver);
+            for (const auto& [driver, sites] : conditionDrivers) {
+                for (const auto& site : sites) {
+                    addLeaf(driver, site);
+                }
             }
         }
     }
@@ -172,6 +213,7 @@ public:
                 if (port->direction == slang::ast::ArgumentDirection::In &&
                     port->internalSymbol == root) {
                     ScopedReset drivenScope(isDriven, true);
+                    ScopedReset portConnectionScope(inPortConnection, true);
                     expr->visit(*this);
                 }
                 else if (port->direction == slang::ast::ArgumentDirection::Out) {
@@ -189,34 +231,53 @@ struct LoadsTracer : public ConeTracer<LoadsTracer> {
 private:
     // Whether visited value expressions should be recorded as loads of the root.
     bool isLhs = false;
-    // Whether the root was encountered on the current data or control path.
-    bool foundRoot = false;
+    // Whether visited value expressions decide which assignments execute.
+    bool inCondition = false;
+    // Whether visited value expressions are the connection of an input port.
+    bool inPortConnection = false;
+    // Whether the current assignment is the connection of the root, which is an output port.
+    bool inRootOutputConnection = false;
+    // Where the root is read on the current data or control path.
+    std::vector<ConeSite> rootSites;
+
+    ConeSiteKind readKind() const {
+        if (inPortConnection) {
+            return ConeSiteKind::Port;
+        }
+        return inCondition ? ConeSiteKind::Control : ConeSiteKind::Data;
+    }
 
 public:
     void handle(const slang::ast::ValueExpressionBase& symbol) {
         if (isLhs) {
-            addLeaf(&symbol);
+            if (inRootOutputConnection) {
+                addLeaf(&symbol, {symbol.sourceRange, ConeSiteKind::Port});
+            }
+            for (const auto& site : rootSites) {
+                addLeaf(&symbol, site);
+            }
         }
         else if (ConeLeaf::concreteSymbol(&symbol.symbol) == root) {
-            foundRoot = true;
+            rootSites.push_back({symbol.sourceRange, readKind()});
         }
     }
 
     void handle(const slang::ast::AssignmentExpression& expr) {
-        ScopedRestore foundRootScope(foundRoot);
-        if (!foundRoot) {
-            expr.right().visit(*this);
-        }
-        if (foundRoot) {
+        ScopedRestore rootSitesScope(rootSites);
+        expr.right().visit(*this);
+        if (inRootOutputConnection || !rootSites.empty()) {
             ScopedReset lhsScope(isLhs, true);
             expr.left().visit(*this);
         }
     }
 
     void handle(const slang::ast::ConditionalStatement& stmt) {
-        ScopedRestore foundRootScope(foundRoot);
-        for (const auto condition : stmt.conditions) {
-            condition.expr->visit(*this);
+        ScopedRestore rootSitesScope(rootSites);
+        {
+            ScopedReset conditionScope(inCondition, true);
+            for (const auto condition : stmt.conditions) {
+                condition.expr->visit(*this);
+            }
         }
         stmt.ifTrue.visit(*this);
         if (stmt.ifFalse) {
@@ -225,18 +286,24 @@ public:
     }
 
     void handle(const slang::ast::CaseStatement& stmt) {
-        ScopedRestore foundRootScope(foundRoot);
-        stmt.expr.visit(*this);
-        bool selectorFoundRoot = foundRoot;
+        ScopedRestore rootSitesScope(rootSites);
+        {
+            ScopedReset conditionScope(inCondition, true);
+            stmt.expr.visit(*this);
+        }
+        const auto selectorSites = rootSites;
         for (const auto item : stmt.items) {
-            foundRoot = selectorFoundRoot;
-            for (const auto expr : item.expressions) {
-                expr->visit(*this);
+            rootSites = selectorSites;
+            {
+                ScopedReset conditionScope(inCondition, true);
+                for (const auto expr : item.expressions) {
+                    expr->visit(*this);
+                }
             }
             item.stmt->visit(*this);
         }
         if (stmt.defaultCase) {
-            foundRoot = selectorFoundRoot;
+            rootSites = selectorSites;
             stmt.defaultCase->visit(*this);
         }
     }
@@ -252,14 +319,15 @@ public:
             if (port) {
                 if (port->direction == slang::ast::ArgumentDirection::Out &&
                     port->internalSymbol == root) {
-                    ScopedReset foundRootScope(foundRoot, true);
+                    ScopedReset outputScope(inRootOutputConnection, true);
                     expr->visit(*this);
                 }
                 else if (port->direction == slang::ast::ArgumentDirection::In) {
-                    ScopedReset foundRootScope(foundRoot);
+                    ScopedRestore rootSitesScope(rootSites);
+                    ScopedReset portConnectionScope(inPortConnection, true);
                     expr->visit(*this);
-                    if (foundRoot) {
-                        addLeaf(port);
+                    for (const auto& site : rootSites) {
+                        addLeaf(port, site);
                     }
                 }
             }

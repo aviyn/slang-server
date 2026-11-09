@@ -94,7 +94,7 @@ const slang::ast::Symbol& ServerCompilationAnalysis::lookupConeSymbol(const std:
     return *result.found;
 }
 
-std::set<ConeLeaf> ServerCompilationAnalysis::getDriverCone(const std::string& path) {
+ConeLeaves ServerCompilationAnalysis::getDriverCone(const std::string& path) {
     const auto& symbol = lookupConeSymbol(path);
     const slang::ast::ValueSymbol* lookupSymbol = symbol.as_if<slang::ast::ValueSymbol>();
     const slang::ast::ValueSymbol* resultSymbol =
@@ -142,7 +142,7 @@ std::set<ConeLeaf> ServerCompilationAnalysis::getDriverCone(const std::string& p
     return tracer.getLeaves();
 }
 
-std::set<ConeLeaf> ServerCompilationAnalysis::getLoadCone(const std::string& path) {
+ConeLeaves ServerCompilationAnalysis::getLoadCone(const std::string& path) {
     const auto& symbol = lookupConeSymbol(path);
     if (!m_references) {
         m_references.emplace();

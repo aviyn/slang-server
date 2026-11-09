@@ -20,6 +20,15 @@ class SourceManager;
 
 namespace server {
 
+/// A place in the source where a cone endpoint connects to the traced signal.
+struct ConeEntrySite {
+    /// The use of the signal being traced from, in the assignment or port connection.
+    lsp::Location location;
+
+    /// Either "data", "control" or "port".
+    std::string kind;
+};
+
 /// A single endpoint of a driver or load cone.
 struct ConeEntry {
     /// The hierarchical RTL path of the signal.
@@ -27,6 +36,9 @@ struct ConeEntry {
 
     /// The declaration location of the signal.
     lsp::Location location;
+
+    /// Where this endpoint connects to the traced signal, in source order.
+    std::vector<ConeEntrySite> sites;
 };
 
 /// Cone leaves with conversions to hierarchical paths and source locations.
@@ -34,7 +46,7 @@ struct ConeEntry {
 class ConeResult {
 public:
     /// Own the leaves and use the source manager to resolve their declaration locations.
-    ConeResult(std::set<ConeLeaf> leaves, const slang::SourceManager& sourceManager) :
+    ConeResult(ConeLeaves leaves, const slang::SourceManager& sourceManager) :
         m_leaves(std::move(leaves)), m_sourceManager(sourceManager) {}
 
     /// Return endpoints with valid declaration locations.
@@ -45,7 +57,7 @@ public:
 
 private:
     /// The unique symbol endpoints collected by tracing.
-    std::set<ConeLeaf> m_leaves;
+    ConeLeaves m_leaves;
 
     /// Source manager for the compilation containing the leaves.
     const slang::SourceManager& m_sourceManager;

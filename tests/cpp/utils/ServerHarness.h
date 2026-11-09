@@ -91,6 +91,14 @@ public:
     void checkConeCommand(const std::string& command, const std::string& path,
                           const std::set<ExpectedConeResult>& expected);
 
+    struct ExpectedConeSite {
+        const Cursor* cursor;
+        std::string kind;
+    };
+    void checkConeSites(const std::string& command, const std::string& path,
+                        const std::string& endpoint,
+                        const std::vector<ExpectedConeSite>& expected);
+
     std::optional<lsp::LSPAny> executeCommand(const lsp::ExecuteCommandParams& params,
                                               const lsp::RequestContext& ctx = {}) {
         return getWorkspaceExecuteCommand(params, ctx);

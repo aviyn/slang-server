@@ -144,6 +144,42 @@ void ServerHarness::checkConeCommand(const std::string& command, const std::stri
     CHECK(gotStarts == expStarts);
 }
 
+void ServerHarness::checkConeSites(const std::string& command, const std::string& path,
+                                   const std::string& endpoint,
+                                   const std::vector<ExpectedConeSite>& expected) {
+    auto response = getWorkspaceExecuteCommand(lsp::ExecuteCommandParams{
+        .command = command,
+        .arguments = std::vector<lsp::LSPAny>{rfl::to_generic(path)},
+    });
+    REQUIRE(response);
+    auto result = rfl::from_generic<std::vector<server::ConeEntry>>(*response);
+    REQUIRE(result);
+
+    auto entry = std::ranges::find(result.value(), endpoint, &server::ConeEntry::path);
+    REQUIRE(entry != result.value().end());
+
+    // (File names only: a document opened from a string is resolved against the working
+    // directory, which other tests change.)
+    auto fileName = [](const URI& uri) {
+        return fs::path(std::string(uri.getPath())).filename().string();
+    };
+
+    std::vector<ExpectedStart> expStarts;
+    for (const auto& expect : expected) {
+        expStarts.push_back({.name = expect.kind,
+                             .uri = fileName(expect.cursor->getUri()),
+                             .start = expect.cursor->getPosition()});
+    }
+
+    std::vector<ExpectedStart> gotStarts;
+    for (const auto& site : entry->sites) {
+        gotStarts.push_back({.name = site.kind,
+                             .uri = fileName(site.location.uri),
+                             .start = site.location.range.start});
+    }
+    CHECK(gotStarts == expStarts);
+}
+
 std::shared_ptr<server::SlangDoc> ServerHarness::getDoc(const URI& uri) {
     if (!m_driver) {
         return nullptr;

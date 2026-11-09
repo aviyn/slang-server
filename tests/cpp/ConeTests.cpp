@@ -185,3 +185,134 @@ endmodule
     server.checkConeCommand("slang.getDriversWithLocation", "top.undriven", {});
     server.checkConeCommand("slang.getDriversWithLocation", "top.unused", {});
 }
+
+TEST_CASE("Cone sites show where signals connect") {
+    ServerHarness server;
+    auto doc = server.openFile("cone_sites.sv", R"(
+`define ASSIGN(dst, src) assign dst = src
+`define ASSIGN_FIXED(dst) assign dst = fixed_src
+
+module child(input logic in, output logic out);
+    assign out = in;
+endmodule
+
+module wide_child(input logic in, output logic [1:0] pair);
+    assign pair = {in, in};
+endmodule
+
+module wild_child(input logic wild_in, output logic wild_out);
+    assign wild_out = wild_in;
+endmodule
+
+module top;
+    logic data_src, data_dst, twice_src, twice_dst, en, gated, gated_d;
+    logic sel, cased, named_src, named_dst, in, out, high, low;
+    logic wild_in, wild_out, macro_src, macro_dst, fixed_src, fixed_dst;
+    logic last;
+
+    assign data_dst = data_src + 1'b1;
+
+    always_comb begin
+        twice_dst = twice_src;
+        twice_dst = ~twice_src;
+    end
+
+    always_comb begin
+        gated = 1'b0;
+        if (en) gated = gated_d;
+    end
+
+    always_comb begin
+        case (sel)
+            1'b0: cased = 1'b1;
+            default: cased = 1'b0;
+        endcase
+    end
+
+    child named(.in (named_src), .out (named_dst));
+    child implicit(.in, .out);
+    wide_child concat(.in (1'b0), .pair ({high, low}));
+    wild_child wild(.*);
+
+    `ASSIGN(macro_dst, macro_src);
+    `ASSIGN_FIXED(fixed_dst);
+endmodule
+)");
+    server.setTopLevel(std::string(doc.m_uri.getPath()));
+
+    const std::string drivers = "slang.getDriversWithLocation";
+    const std::string loads = "slang.getLoadsWithLocation";
+
+    SECTION("Assignment") {
+        auto read = doc.before("data_src + ");
+        server.checkConeSites(drivers, "top.data_dst", "top.data_src", {{&read, "data"}});
+        server.checkConeSites(loads, "top.data_src", "top.data_dst", {{&read, "data"}});
+    }
+
+    SECTION("Every assignment is a site") {
+        auto first = doc.before("twice_src;");
+        auto second = first.after("twice_src;").before("twice_src;");
+        server.checkConeSites(drivers, "top.twice_dst", "top.twice_src",
+                              {{&first, "data"}, {&second, "data"}});
+        server.checkConeSites(loads, "top.twice_src", "top.twice_dst",
+                              {{&first, "data"}, {&second, "data"}});
+    }
+
+    SECTION("If condition") {
+        auto read = doc.before("en) gated");
+        server.checkConeSites(drivers, "top.gated", "top.en", {{&read, "control"}});
+        server.checkConeSites(loads, "top.en", "top.gated", {{&read, "control"}});
+    }
+
+    SECTION("Assignment under a condition") {
+        auto read = doc.after("if (en) gated = ");
+        server.checkConeSites(drivers, "top.gated", "top.gated_d", {{&read, "data"}});
+    }
+
+    SECTION("Case selector") {
+        auto read = doc.before("sel)");
+        server.checkConeSites(drivers, "top.cased", "top.sel", {{&read, "control"}});
+        server.checkConeSites(loads, "top.sel", "top.cased", {{&read, "control"}});
+    }
+
+    SECTION("Named input port") {
+        auto read = doc.before("named_src)");
+        server.checkConeSites(drivers, "top.named.in", "top.named_src", {{&read, "port"}});
+        server.checkConeSites(loads, "top.named_src", "top.named.in", {{&read, "port"}});
+    }
+
+    SECTION("Named output port") {
+        auto read = doc.before("named_dst)");
+        server.checkConeSites(drivers, "top.named_dst", "top.named.out", {{&read, "port"}});
+        server.checkConeSites(loads, "top.named.out", "top.named_dst", {{&read, "port"}});
+    }
+
+    SECTION("Implicit ports") {
+        auto input = doc.before("in, .out)");
+        auto output = doc.after("implicit(.in, .");
+        server.checkConeSites(drivers, "top.implicit.in", "top.in", {{&input, "port"}});
+        server.checkConeSites(drivers, "top.out", "top.implicit.out", {{&output, "port"}});
+    }
+
+    SECTION("Wildcard ports") {
+        auto wildcard = doc.before(".*)");
+        server.checkConeSites(drivers, "top.wild.wild_in", "top.wild_in", {{&wildcard, "port"}});
+        server.checkConeSites(loads, "top.wild.wild_out", "top.wild_out", {{&wildcard, "port"}});
+    }
+
+    SECTION("One signal of a concatenated output") {
+        auto read = doc.before("low})");
+        server.checkConeSites(drivers, "top.low", "top.concat.pair", {{&read, "port"}});
+        server.checkConeSites(loads, "top.concat.pair", "top.low", {{&read, "port"}});
+    }
+
+    SECTION("Macro argument") {
+        auto read = doc.before("macro_src);");
+        server.checkConeSites(drivers, "top.macro_dst", "top.macro_src", {{&read, "data"}});
+    }
+
+    SECTION("Macro body") {
+        auto use = doc.before("`ASSIGN_FIXED(fixed_dst)");
+        server.checkConeSites(drivers, "top.fixed_dst", "top.fixed_src", {{&use, "data"}});
+    }
+}

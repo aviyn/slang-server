@@ -224,9 +224,15 @@ export async function getModulesInFile(fsPath: string): Promise<string[]> {
 
 /// A single endpoint of a driver/load cone: the RTL path of the driver/load and
 /// where it appears in source.
+export interface ConeEntrySite {
+  location: Location
+  kind: 'data' | 'control' | 'port'
+}
+
 export interface ConeEntry {
   path: string
   location: Location
+  sites: ConeEntrySite[]
 }
 
 /// Cone tracing: Get the drivers of a given RTL path, each with its RTL path and source location.
