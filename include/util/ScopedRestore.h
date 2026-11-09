@@ -23,6 +23,7 @@ template<typename T>
 class ScopedRestore {
 public:
     explicit ScopedRestore(T& value) : value(value), savedValue(value) {}
+    ScopedRestore(T& value, T replacement) : ScopedRestore(value) { value = std::move(replacement); }
     ~ScopedRestore() { std::swap(value, savedValue); }
 
     ScopedRestore(const ScopedRestore&) = delete;

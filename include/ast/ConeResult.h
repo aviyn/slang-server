@@ -22,10 +22,11 @@ namespace server {
 
 /// A place in the source where a cone endpoint connects to the traced signal.
 struct ConeEntrySite {
-    /// The use of the signal being traced from, in the assignment or port connection.
+    /// The use of the signal being traced from, in the assignment or port connection. For a
+    /// "constant" or "call", the value assigned.
     lsp::Location location;
 
-    /// One of "data", "wire", "control", "port" or "constant".
+    /// One of "data", "wire", "control", "port", "constant" or "call".
     std::string kind;
 };
 
@@ -41,6 +42,12 @@ struct ConeEntry {
     std::vector<ConeEntrySite> sites;
 };
 
+/// The drivers of a signal, and where it is assigned a value that no signal feeds.
+struct ConeDrivers {
+    std::vector<ConeEntry> drivers;
+    std::vector<ConeEntrySite> constants;
+};
+
 /// Cone leaves with conversions to hierarchical paths and source locations.
 /// The source manager and compilation containing the leaves must outlive this result.
 class ConeResult {
@@ -53,7 +60,8 @@ public:
     /// Return endpoints with valid declaration locations.
     std::vector<ConeEntry> getLocations() const;
 
-    /// Return where the traced signal is assigned a value that reads no signal, in source order.
+    /// Return where the traced signal is assigned a value that no signal feeds, in source order.
+    /// Only driver cones have these.
     std::vector<ConeEntrySite> getConstants() const;
 
     /// Return distinct hierarchical paths in the cone.

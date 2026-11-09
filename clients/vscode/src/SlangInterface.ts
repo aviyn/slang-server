@@ -222,17 +222,24 @@ export async function getModulesInFile(fsPath: string): Promise<string[]> {
   return await vscode.commands.executeCommand('slang.getModulesInFile', fsPath)
 }
 
-/// A single endpoint of a driver/load cone: the RTL path of the driver/load and
-/// where it appears in source.
+/// Where a cone endpoint connects to the traced signal.
 export interface ConeEntrySite {
   location: Location
-  kind: 'data' | 'wire' | 'control' | 'port' | 'constant'
+  kind: 'data' | 'wire' | 'control' | 'port' | 'constant' | 'call'
 }
 
+/// A single endpoint of a driver/load cone: the RTL path of the driver/load and
+/// where it appears in source.
 export interface ConeEntry {
   path: string
   location: Location
   sites: ConeEntrySite[]
+}
+
+/// The drivers of a signal, and where it is assigned a value that no signal feeds.
+export interface ConeDrivers {
+  drivers: ConeEntry[]
+  constants: ConeEntrySite[]
 }
 
 /// Cone tracing: Get the drivers of a given RTL path, each with its RTL path and source location.
@@ -245,9 +252,9 @@ export async function getLoadsWithLocation(hierPath: string): Promise<ConeEntry[
   return await vscode.commands.executeCommand('slang.getLoadsWithLocation', hierPath)
 }
 
-/// Cone tracing: Get where a given RTL path is assigned a value that reads no signal.
-export async function getConstantDrivers(hierPath: string): Promise<ConeEntrySite[] | undefined> {
-  return await vscode.commands.executeCommand('slang.getConstantDrivers', hierPath)
+/// Cone tracing: Get the drivers of a given RTL path and its assignments that no signal feeds.
+export async function getDriversWithConstants(hierPath: string): Promise<ConeDrivers | undefined> {
+  return await vscode.commands.executeCommand('slang.getDriversWithConstants', hierPath)
 }
 
 interface ExpandMacroArgs {

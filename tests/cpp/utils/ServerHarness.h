@@ -98,7 +98,10 @@ public:
     void checkConeSites(const std::string& command, const std::string& path,
                         const std::string& endpoint,
                         const std::vector<ExpectedConeSite>& expected);
-    void checkConeConstants(const std::string& path, const std::vector<const Cursor*>& expected);
+    void checkConeConstants(const std::string& path,
+                            const std::vector<ExpectedConeSite>& expected);
+    void checkSites(const std::vector<server::ConeEntrySite>& sites,
+                    const std::vector<ExpectedConeSite>& expected);
 
     std::optional<lsp::LSPAny> executeCommand(const lsp::ExecuteCommandParams& params,
                                               const lsp::RequestContext& ctx = {}) {

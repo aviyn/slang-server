@@ -9,7 +9,6 @@
 
 #include "util/Converters.h"
 #include <algorithm>
-#include <filesystem>
 #include <tuple>
 
 #include "slang/text/SourceManager.h"
@@ -30,6 +29,8 @@ std::string_view siteKindName(ConeSiteKind kind) {
             return "port";
         case ConeSiteKind::Constant:
             return "constant";
+        case ConeSiteKind::Call:
+            return "call";
     }
     SLANG_UNREACHABLE;
 }
@@ -59,10 +60,8 @@ std::vector<ConeEntrySite> toEntrySites(const std::set<ConeSite>& sites,
         if (!site.range.start().valid()) {
             continue;
         }
-        auto range = throughMacroArguments(site.range, sourceManager);
-        auto fullPath = std::filesystem::absolute(sourceManager.getFileName(range.start()));
-        result.push_back({.location = {.uri = URI::fromFile(fullPath),
-                                       .range = toRange(range, sourceManager)},
+        result.push_back({.location = toLocation(throughMacroArguments(site.range, sourceManager),
+                                                 sourceManager),
                           .kind = std::string(siteKindName(site.kind))});
     }
     std::ranges::sort(result, {}, siteOrder);
@@ -78,10 +77,8 @@ std::vector<ConeEntry> ConeResult::getLocations() const {
     for (const auto& [leaf, sites] : m_leaves) {
         auto range = leaf.getDeclarationRange();
         if (range.start().valid()) {
-            auto fullPath = std::filesystem::absolute(m_sourceManager.getFileName(range.start()));
             result.push_back({.path = leaf.getHierarchicalPath(),
-                              .location = {.uri = URI::fromFile(fullPath),
-                                           .range = toRange(range, m_sourceManager)},
+                              .location = toLocation(range, m_sourceManager),
                               .sites = toEntrySites(sites, m_sourceManager)});
         }
     }

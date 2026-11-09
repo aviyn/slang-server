@@ -139,7 +139,7 @@ ConeTrace ServerCompilationAnalysis::getDriverCone(const std::string& path) {
         driver->containingSymbol->visit(tracer);
     }
 
-    return tracer.getTrace();
+    return std::move(tracer).getTrace();
 }
 
 ConeTrace ServerCompilationAnalysis::getLoadCone(const std::string& path) {
@@ -160,7 +160,7 @@ ConeTrace ServerCompilationAnalysis::getLoadCone(const std::string& path) {
         use->visit(coneTracer);
     }
 
-    return coneTracer.getTrace();
+    return std::move(coneTracer).getTrace();
 }
 
 } // namespace server

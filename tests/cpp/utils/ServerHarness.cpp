@@ -158,6 +158,23 @@ void ServerHarness::checkConeSites(const std::string& command, const std::string
     auto entry = std::ranges::find(result.value(), endpoint, &server::ConeEntry::path);
     REQUIRE(entry != result.value().end());
 
+    checkSites(entry->sites, expected);
+}
+
+void ServerHarness::checkConeConstants(const std::string& path,
+                                       const std::vector<ExpectedConeSite>& expected) {
+    auto response = getWorkspaceExecuteCommand(lsp::ExecuteCommandParams{
+        .command = "slang.getDriversWithConstants",
+        .arguments = std::vector<lsp::LSPAny>{rfl::to_generic(path)},
+    });
+    REQUIRE(response);
+    auto result = rfl::from_generic<server::ConeDrivers>(*response);
+    REQUIRE(result);
+    checkSites(result.value().constants, expected);
+}
+
+void ServerHarness::checkSites(const std::vector<server::ConeEntrySite>& sites,
+                               const std::vector<ExpectedConeSite>& expected) {
     // (File names only: a document opened from a string is resolved against the working
     // directory, which other tests change.)
     auto fileName = [](const URI& uri) {
@@ -172,33 +189,10 @@ void ServerHarness::checkConeSites(const std::string& command, const std::string
     }
 
     std::vector<ExpectedStart> gotStarts;
-    for (const auto& site : entry->sites) {
+    for (const auto& site : sites) {
         gotStarts.push_back({.name = site.kind,
                              .uri = fileName(site.location.uri),
                              .start = site.location.range.start});
-    }
-    CHECK(gotStarts == expStarts);
-}
-
-void ServerHarness::checkConeConstants(const std::string& path,
-                                       const std::vector<const Cursor*>& expected) {
-    auto response = getWorkspaceExecuteCommand(lsp::ExecuteCommandParams{
-        .command = "slang.getConstantDrivers",
-        .arguments = std::vector<lsp::LSPAny>{rfl::to_generic(path)},
-    });
-    REQUIRE(response);
-    auto result = rfl::from_generic<std::vector<server::ConeEntrySite>>(*response);
-    REQUIRE(result);
-
-    std::vector<lsp::Position> expStarts;
-    for (const auto* cursor : expected) {
-        expStarts.push_back(cursor->getPosition());
-    }
-
-    std::vector<lsp::Position> gotStarts;
-    for (const auto& site : result.value()) {
-        CHECK(site.kind == "constant");
-        gotStarts.push_back(site.location.range.start);
     }
     CHECK(gotStarts == expStarts);
 }

@@ -47,10 +47,10 @@ public:
     std::vector<const slang::analysis::ValueDriver*> getDrivers(
         const slang::ast::ValueSymbol& symbol);
 
-    /// Get driver cone leaves for a given RTL path.
+    /// Get the driver cone for a given RTL path.
     ConeTrace getDriverCone(const std::string& path);
 
-    /// Get load cone leaves for a given RTL path.
+    /// Get the load cone for a given RTL path.
     ConeTrace getLoadCone(const std::string& path);
 
 private:

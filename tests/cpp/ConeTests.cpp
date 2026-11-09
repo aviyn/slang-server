@@ -263,6 +263,30 @@ module top;
         counted = 1'b0;
         counted += 1'b1;
     end
+
+    function logic make_bit();
+        return 1'b1;
+    endfunction
+    logic from_call;
+    assign from_call = make_bit();
+
+    logic dflt_src, dflt_alt, dflt_dst, star_src, star_dst, idx, idx_src, mem_d;
+    logic [3:0] mem, mem2, bus;
+    always_comb begin
+        dflt_dst = dflt_src;
+        if (en) dflt_dst = dflt_alt;
+    end
+    always @* star_dst = star_src;
+    always_comb begin
+        idx = idx_src;
+        mem[idx] = 1'b0;
+        mem2[idx] = mem_d;
+    end
+
+    child logic_port(.in (en & sel), .out ());
+    child bit_port(.in (bus[0]), .out ());
+    child picked_port(.in (bus[sel]), .out ());
+    wide_child padded_port(.in ({bus[1:1]}), .pair ());
 endmodule
 )");
     server.setTopLevel(std::string(doc.m_uri.getPath()));
@@ -302,9 +326,9 @@ endmodule
         auto first = doc.before("twice_src;");
         auto second = first.after("twice_src;").before("twice_src;");
         server.checkConeSites(drivers, "top.twice_dst", "top.twice_src",
-                              {{&first, "wire"}, {&second, "data"}});
+                              {{&first, "data"}, {&second, "data"}});
         server.checkConeSites(loads, "top.twice_src", "top.twice_dst",
-                              {{&first, "wire"}, {&second, "data"}});
+                              {{&first, "data"}, {&second, "data"}});
     }
 
     SECTION("If condition") {
@@ -367,24 +391,24 @@ endmodule
 
     SECTION("Constant assignments") {
         auto literal = doc.after("assign lit = ");
-        server.checkConeConstants("top.lit", {&literal});
+        server.checkConeConstants("top.lit", {{&literal, "constant"}});
         auto param = doc.after("assign param_dst = ");
-        server.checkConeConstants("top.param_dst", {&param});
+        server.checkConeConstants("top.param_dst", {{&param, "constant"}});
         auto member = doc.after("assign state = ");
-        server.checkConeConstants("top.state", {&member});
+        server.checkConeConstants("top.state", {{&member, "constant"}});
     }
 
     SECTION("Constant assignments under conditions") {
         auto zero = doc.after("if (en) reset_flop <= ");
-        server.checkConeConstants("top.reset_flop", {&zero});
+        server.checkConeConstants("top.reset_flop", {{&zero, "constant"}});
         auto one = doc.after("1'b0: cased = ");
         auto other = doc.after("default: cased = ");
-        server.checkConeConstants("top.cased", {&one, &other});
+        server.checkConeConstants("top.cased", {{&one, "constant"}, {&other, "constant"}});
     }
 
     SECTION("A constant tied to an input port") {
         auto tied = doc.before("1'b0), .pair");
-        server.checkConeConstants("top.concat.in", {&tied});
+        server.checkConeConstants("top.concat.in", {{&tied, "constant"}});
     }
 
     SECTION("Not constant assignments") {
@@ -398,7 +422,49 @@ endmodule
 
     SECTION("A compound assignment reads its target") {
         auto reset = doc.after("counted = ");
-        server.checkConeConstants("top.counted", {&reset});
+        server.checkConeConstants("top.counted", {{&reset, "constant"}});
+    }
+
+    SECTION("A call that is given no signal") {
+        auto call = doc.after("assign from_call = ");
+        server.checkConeConstants("top.from_call", {{&call, "call"}});
+    }
+
+    SECTION("A default assignment that is replaced isn't a wire") {
+        auto read = doc.after("dflt_dst = ").before("dflt_src;");
+        server.checkConeSites(drivers, "top.dflt_dst", "top.dflt_src", {{&read, "data"}});
+        server.checkConeSites(loads, "top.dflt_src", "top.dflt_dst", {{&read, "data"}});
+    }
+
+    SECTION("always @* is combinational") {
+        auto read = doc.before("star_src;");
+        server.checkConeSites(drivers, "top.star_dst", "top.star_src", {{&read, "wire"}});
+    }
+
+    SECTION("An index on the left isn't written") {
+        server.checkConeConstants("top.idx", {});
+        auto read = doc.before("idx_src;");
+        server.checkConeSites(drivers, "top.idx", "top.idx_src", {{&read, "wire"}});
+        auto zero = doc.after("mem[idx] = ");
+        server.checkConeConstants("top.mem", {{&zero, "constant"}});
+        auto target = doc.before("mem2, bus");
+        server.checkConeCommand(loads, "top.mem_d", {{"top.mem2", &target}});
+    }
+
+    SECTION("Logic in a port map isn't wiring") {
+        auto en = doc.before("en & sel)");
+        auto sel = doc.before("sel), .out");
+        server.checkConeSites(drivers, "top.logic_port.in", "top.en", {{&en, "data"}});
+        server.checkConeSites(loads, "top.sel", "top.logic_port.in", {{&sel, "data"}});
+        auto picked = doc.before("bus[sel])");
+        server.checkConeSites(drivers, "top.picked_port.in", "top.bus", {{&picked, "data"}});
+    }
+
+    SECTION("Bits routed by a port map are wiring") {
+        auto bit = doc.before("bus[0])");
+        server.checkConeSites(drivers, "top.bit_port.in", "top.bus", {{&bit, "port"}});
+        auto bits = doc.before("bus[1:1]");
+        server.checkConeSites(drivers, "top.padded_port.in", "top.bus", {{&bits, "port"}});
     }
 
     SECTION("An enum value isn't a wire") {
