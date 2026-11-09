@@ -226,7 +226,7 @@ export async function getModulesInFile(fsPath: string): Promise<string[]> {
 /// where it appears in source.
 export interface ConeEntrySite {
   location: Location
-  kind: 'data' | 'control' | 'port'
+  kind: 'data' | 'wire' | 'control' | 'port' | 'constant'
 }
 
 export interface ConeEntry {
@@ -243,6 +243,11 @@ export async function getDriversWithLocation(hierPath: string): Promise<ConeEntr
 /// Cone tracing: Get the loads of a given RTL path, each with its RTL path and source location.
 export async function getLoadsWithLocation(hierPath: string): Promise<ConeEntry[] | undefined> {
   return await vscode.commands.executeCommand('slang.getLoadsWithLocation', hierPath)
+}
+
+/// Cone tracing: Get where a given RTL path is assigned a value that reads no signal.
+export async function getConstantDrivers(hierPath: string): Promise<ConeEntrySite[] | undefined> {
+  return await vscode.commands.executeCommand('slang.getConstantDrivers', hierPath)
 }
 
 interface ExpandMacroArgs {

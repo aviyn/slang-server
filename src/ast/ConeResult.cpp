@@ -22,10 +22,14 @@ std::string_view siteKindName(ConeSiteKind kind) {
     switch (kind) {
         case ConeSiteKind::Data:
             return "data";
+        case ConeSiteKind::Wire:
+            return "wire";
         case ConeSiteKind::Control:
             return "control";
         case ConeSiteKind::Port:
             return "port";
+        case ConeSiteKind::Constant:
+            return "constant";
     }
     SLANG_UNREACHABLE;
 }
@@ -82,6 +86,10 @@ std::vector<ConeEntry> ConeResult::getLocations() const {
         }
     }
     return result;
+}
+
+std::vector<ConeEntrySite> ConeResult::getConstants() const {
+    return toEntrySites(m_constants, m_sourceManager);
 }
 
 std::vector<std::string> ConeResult::getPaths() const {

@@ -94,7 +94,7 @@ const slang::ast::Symbol& ServerCompilationAnalysis::lookupConeSymbol(const std:
     return *result.found;
 }
 
-ConeLeaves ServerCompilationAnalysis::getDriverCone(const std::string& path) {
+ConeTrace ServerCompilationAnalysis::getDriverCone(const std::string& path) {
     const auto& symbol = lookupConeSymbol(path);
     const slang::ast::ValueSymbol* lookupSymbol = symbol.as_if<slang::ast::ValueSymbol>();
     const slang::ast::ValueSymbol* resultSymbol =
@@ -139,10 +139,10 @@ ConeLeaves ServerCompilationAnalysis::getDriverCone(const std::string& path) {
         driver->containingSymbol->visit(tracer);
     }
 
-    return tracer.getLeaves();
+    return tracer.getTrace();
 }
 
-ConeLeaves ServerCompilationAnalysis::getLoadCone(const std::string& path) {
+ConeTrace ServerCompilationAnalysis::getLoadCone(const std::string& path) {
     const auto& symbol = lookupConeSymbol(path);
     if (!m_references) {
         m_references.emplace();
@@ -160,7 +160,7 @@ ConeLeaves ServerCompilationAnalysis::getLoadCone(const std::string& path) {
         use->visit(coneTracer);
     }
 
-    return coneTracer.getLeaves();
+    return coneTracer.getTrace();
 }
 
 } // namespace server

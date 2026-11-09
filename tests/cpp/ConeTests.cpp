@@ -208,7 +208,17 @@ module top;
     logic data_src, data_dst, twice_src, twice_dst, en, gated, gated_d;
     logic sel, cased, named_src, named_dst, in, out, high, low;
     logic wild_in, wild_out, macro_src, macro_dst, fixed_src, fixed_dst;
+    logic wire_src, wire_dst, comb_src, comb_dst, flop_d, flop_q, cond_src, cond_dst, clk;
+    logic [1:0] sliced, shrunk;
+    logic [3:0] whole_a, whole_b;
     logic last;
+
+    assign wire_dst = wire_src;
+    always_comb comb_dst = comb_src;
+    always_ff @(posedge clk) flop_q <= flop_d;
+    always_comb if (en) cond_dst = cond_src;
+    assign sliced = whole_a[1:0];
+    assign shrunk = whole_b;
 
     assign data_dst = data_src + 1'b1;
 
@@ -236,6 +246,23 @@ module top;
 
     `ASSIGN(macro_dst, macro_src);
     `ASSIGN_FIXED(fixed_dst);
+
+    parameter logic PARAM = 1'b1;
+    typedef enum logic { IDLE, BUSY } state_e;
+    state_e state;
+    logic lit, param_dst, reset_flop, counted, rd_only;
+
+    assign lit = 1'b1;
+    assign param_dst = PARAM;
+    assign state = IDLE;
+    always_ff @(posedge clk) begin
+        if (en) reset_flop <= '0;
+        else reset_flop <= flop_d;
+    end
+    always_comb begin
+        counted = 1'b0;
+        counted += 1'b1;
+    end
 endmodule
 )");
     server.setTopLevel(std::string(doc.m_uri.getPath()));
@@ -249,13 +276,35 @@ endmodule
         server.checkConeSites(loads, "top.data_src", "top.data_dst", {{&read, "data"}});
     }
 
+    SECTION("A plain copy is a wire") {
+        auto assigned = doc.before("wire_src;");
+        server.checkConeSites(drivers, "top.wire_dst", "top.wire_src", {{&assigned, "wire"}});
+        server.checkConeSites(loads, "top.wire_src", "top.wire_dst", {{&assigned, "wire"}});
+        auto comb = doc.before("comb_src;");
+        server.checkConeSites(drivers, "top.comb_dst", "top.comb_src", {{&comb, "wire"}});
+        server.checkConeSites(loads, "top.comb_src", "top.comb_dst", {{&comb, "wire"}});
+    }
+
+    SECTION("A copy that is logic is not a wire") {
+        auto flop = doc.before("flop_d;");
+        server.checkConeSites(drivers, "top.flop_q", "top.flop_d", {{&flop, "data"}});
+        server.checkConeSites(loads, "top.flop_d", "top.flop_q", {{&flop, "data"}});
+        auto gated = doc.before("cond_src;");
+        server.checkConeSites(drivers, "top.cond_dst", "top.cond_src", {{&gated, "data"}});
+        server.checkConeSites(loads, "top.cond_src", "top.cond_dst", {{&gated, "data"}});
+        auto slice = doc.before("whole_a[1:0]");
+        server.checkConeSites(drivers, "top.sliced", "top.whole_a", {{&slice, "data"}});
+        auto narrowed = doc.after("assign shrunk = ");
+        server.checkConeSites(drivers, "top.shrunk", "top.whole_b", {{&narrowed, "data"}});
+    }
+
     SECTION("Every assignment is a site") {
         auto first = doc.before("twice_src;");
         auto second = first.after("twice_src;").before("twice_src;");
         server.checkConeSites(drivers, "top.twice_dst", "top.twice_src",
-                              {{&first, "data"}, {&second, "data"}});
+                              {{&first, "wire"}, {&second, "data"}});
         server.checkConeSites(loads, "top.twice_src", "top.twice_dst",
-                              {{&first, "data"}, {&second, "data"}});
+                              {{&first, "wire"}, {&second, "data"}});
     }
 
     SECTION("If condition") {
@@ -308,11 +357,52 @@ endmodule
 
     SECTION("Macro argument") {
         auto read = doc.before("macro_src);");
-        server.checkConeSites(drivers, "top.macro_dst", "top.macro_src", {{&read, "data"}});
+        server.checkConeSites(drivers, "top.macro_dst", "top.macro_src", {{&read, "wire"}});
     }
 
     SECTION("Macro body") {
         auto use = doc.before("`ASSIGN_FIXED(fixed_dst)");
-        server.checkConeSites(drivers, "top.fixed_dst", "top.fixed_src", {{&use, "data"}});
+        server.checkConeSites(drivers, "top.fixed_dst", "top.fixed_src", {{&use, "wire"}});
+    }
+
+    SECTION("Constant assignments") {
+        auto literal = doc.after("assign lit = ");
+        server.checkConeConstants("top.lit", {&literal});
+        auto param = doc.after("assign param_dst = ");
+        server.checkConeConstants("top.param_dst", {&param});
+        auto member = doc.after("assign state = ");
+        server.checkConeConstants("top.state", {&member});
+    }
+
+    SECTION("Constant assignments under conditions") {
+        auto zero = doc.after("if (en) reset_flop <= ");
+        server.checkConeConstants("top.reset_flop", {&zero});
+        auto one = doc.after("1'b0: cased = ");
+        auto other = doc.after("default: cased = ");
+        server.checkConeConstants("top.cased", {&one, &other});
+    }
+
+    SECTION("A constant tied to an input port") {
+        auto tied = doc.before("1'b0), .pair");
+        server.checkConeConstants("top.concat.in", {&tied});
+    }
+
+    SECTION("Not constant assignments") {
+        // A signal is read, an output port drives it, or nothing does.
+        server.checkConeConstants("top.data_dst", {});
+        server.checkConeConstants("top.wire_dst", {});
+        server.checkConeConstants("top.named_dst", {});
+        server.checkConeConstants("top.named.in", {});
+        server.checkConeConstants("top.rd_only", {});
+    }
+
+    SECTION("A compound assignment reads its target") {
+        auto reset = doc.after("counted = ");
+        server.checkConeConstants("top.counted", {&reset});
+    }
+
+    SECTION("An enum value isn't a wire") {
+        auto member = doc.after("assign state = ");
+        server.checkConeSites(drivers, "top.state", "top.state_e.IDLE", {{&member, "data"}});
     }
 }

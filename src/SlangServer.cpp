@@ -121,6 +121,10 @@ lsp::InitializeResult SlangServer::getInitialize(const lsp::InitializeParams& pa
         "slang.getLoadsWithLocation", [](ServerCompilation& comp, const std::string& hierPath) {
             return comp.getLoadCone(hierPath).getLocations();
         });
+    registerDesignCommand<std::string, std::vector<server::ConeEntrySite>>(
+        "slang.getConstantDrivers", [](ServerCompilation& comp, const std::string& hierPath) {
+            return comp.getDriverCone(hierPath).getConstants();
+        });
 
     // Hierarchy View (sidebar)
     registerCommand<std::string, std::vector<hier::HierItem_t>, &SlangServer::getScope>(

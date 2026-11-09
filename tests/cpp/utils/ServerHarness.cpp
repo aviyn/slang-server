@@ -180,6 +180,29 @@ void ServerHarness::checkConeSites(const std::string& command, const std::string
     CHECK(gotStarts == expStarts);
 }
 
+void ServerHarness::checkConeConstants(const std::string& path,
+                                       const std::vector<const Cursor*>& expected) {
+    auto response = getWorkspaceExecuteCommand(lsp::ExecuteCommandParams{
+        .command = "slang.getConstantDrivers",
+        .arguments = std::vector<lsp::LSPAny>{rfl::to_generic(path)},
+    });
+    REQUIRE(response);
+    auto result = rfl::from_generic<std::vector<server::ConeEntrySite>>(*response);
+    REQUIRE(result);
+
+    std::vector<lsp::Position> expStarts;
+    for (const auto* cursor : expected) {
+        expStarts.push_back(cursor->getPosition());
+    }
+
+    std::vector<lsp::Position> gotStarts;
+    for (const auto& site : result.value()) {
+        CHECK(site.kind == "constant");
+        gotStarts.push_back(site.location.range.start);
+    }
+    CHECK(gotStarts == expStarts);
+}
+
 std::shared_ptr<server::SlangDoc> ServerHarness::getDoc(const URI& uri) {
     if (!m_driver) {
         return nullptr;

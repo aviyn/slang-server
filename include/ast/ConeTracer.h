@@ -18,8 +18,11 @@
 #include "slang/ast/SemanticFacts.h"
 #include "slang/ast/Statement.h"
 #include "slang/ast/Symbol.h"
+#include "slang/ast/expressions/AssignmentExpressions.h"
+#include "slang/ast/expressions/ConversionExpression.h"
 #include "slang/ast/expressions/MiscExpressions.h"
 #include "slang/ast/statements/ConditionalStatements.h"
+#include "slang/ast/symbols/BlockSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/PortSymbols.h"
@@ -48,6 +51,11 @@ public:
 
     bool isParameter() const { return symbol->kind == slang::ast::SymbolKind::Parameter; }
 
+    /// Whether this names a fixed value rather than a signal.
+    bool isConstant() const {
+        return isParameter() || symbol->kind == slang::ast::SymbolKind::EnumValue;
+    }
+
     bool operator<(const ConeLeaf& other) const {
         return std::less<const slang::ast::Symbol*>{}(symbol, other.symbol);
     }
@@ -67,10 +75,15 @@ private:
 enum class ConeSiteKind {
     /// Read as a value in the connecting assignment.
     Data,
+    /// Copied whole to the other signal by logic that has no condition or clock, so the two are
+    /// effectively one wire.
+    Wire,
     /// Decides whether the connecting assignment executes.
     Control,
     /// Connected through an instance's port map.
     Port,
+    /// Assigned a value that reads no signal.
+    Constant,
 };
 
 /// Where a cone edge is made in the source: the use of the signal being traced from, in the
@@ -93,24 +106,77 @@ struct ConeSite {
 /// Every signal in a cone, with the places it connects to the root.
 using ConeLeaves = std::map<ConeLeaf, std::set<ConeSite>>;
 
+/// What tracing a signal found.
+struct ConeTrace {
+    ConeLeaves leaves;
+
+    /// Where the root is assigned a value that reads no signal, so no leaf stands for it. Only
+    /// drivers have these.
+    std::set<ConeSite> constants;
+};
+
 template<typename TDerived>
 struct ConeTracer : public slang::ast::ASTVisitor<TDerived, slang::ast::VisitFlags::AllGood> {
 protected:
     const slang::ast::Symbol* root;
 
+    // Whether visited assignments are neither clocked nor latched.
+    bool inCombinational = false;
+    // Whether visited statements only execute under a condition.
+    bool underCondition = false;
+
+    bool isWire(const slang::ast::AssignmentExpression& expr) const {
+        return inCombinational && !underCondition && isPlainCopy(expr);
+    }
+
     void addLeaf(const ConeLeaf& leaf, const ConeSite& site) {
         if (!leaf.isParameter()) {
-            leaves[leaf].insert(site);
+            trace.leaves[leaf].insert(site);
         }
+    }
+
+    void addConstant(const slang::ast::Expression& value) {
+        trace.constants.insert({value.sourceRange, ConeSiteKind::Constant});
     }
 
 private:
     ConeTracer(const slang::ast::Symbol* root) : root(ConeLeaf::concreteSymbol(root)) {}
 
-    ConeLeaves leaves;
+    ConeTrace trace;
+
+    // Only a whole signal on each side: a select, an expression or a change of width is logic, and
+    // a parameter or an enum value isn't a signal.
+    static bool isPlainCopy(const slang::ast::AssignmentExpression& expr) {
+        using namespace slang::ast;
+        if (expr.isCompound() || !ValueExpressionBase::isKind(expr.left().kind)) {
+            return false;
+        }
+        const Expression* source = &expr.right();
+        while (const auto conversion = source->as_if<ConversionExpression>()) {
+            if (!conversion->isImplicit()) {
+                return false;
+            }
+            source = &conversion->operand();
+        }
+        return ValueExpressionBase::isKind(source->kind) &&
+               !ConeLeaf(&source->as<ValueExpressionBase>()).isConstant() &&
+               source->type->getBitWidth() == expr.left().type->getBitWidth();
+    }
 
 public:
-    ConeLeaves getLeaves() { return leaves; }
+    ConeTrace getTrace() { return trace; }
+
+    void handle(const slang::ast::ContinuousAssignSymbol& symbol) {
+        ScopedReset combinationalScope(inCombinational, true);
+        this->visitDefault(symbol);
+    }
+
+    void handle(const slang::ast::ProceduralBlockSymbol& symbol) {
+        bool combinational = symbol.procedureKind == slang::ast::ProceduralBlockKind::AlwaysComb;
+        ScopedReset combinationalScope(inCombinational, combinational);
+        this->visitDefault(symbol);
+    }
+
     friend TDerived;
 };
 
@@ -127,21 +193,34 @@ private:
     bool inCondition = false;
     // Whether visited value expressions are the connection of an input port.
     bool inPortConnection = false;
+    // Whether visited value expressions are copied whole to the root.
+    bool inWire = false;
+    // Whether the value driving the root has read a signal so far.
+    bool readsSignal = false;
 
     // Where the current assignment writes the root.
     slang::SourceRange rootRange;
 
     const slang::ast::PortSymbol* portSymbol = nullptr;
 
+    ConeSiteKind readKind() const {
+        if (inPortConnection) {
+            return ConeSiteKind::Port;
+        }
+        return inWire ? ConeSiteKind::Wire : ConeSiteKind::Data;
+    }
+
 public:
+    using ConeTracer::handle;
+
     void handle(const slang::ast::ValueExpressionBase& symbol) {
         if (isLhs && ConeLeaf::concreteSymbol(&symbol.symbol) == root) {
             isDriven = true;
             rootRange = symbol.sourceRange;
         }
         else if (!isLhs && isDriven) {
-            addLeaf(&symbol, {symbol.sourceRange,
-                              inPortConnection ? ConeSiteKind::Port : ConeSiteKind::Data});
+            readsSignal = readsSignal || !ConeLeaf(&symbol).isConstant();
+            addLeaf(&symbol, {symbol.sourceRange, readKind()});
         }
         if (inCondition) {
             conditionDrivers[&symbol].insert({symbol.sourceRange, ConeSiteKind::Control});
@@ -155,9 +234,17 @@ public:
             expr.left().visit(*this);
         }
         if (isDriven) {
-            expr.right().visit(*this);
+            ScopedReset readsScope(readsSignal);
+            {
+                ScopedReset wireScope(inWire, isWire(expr));
+                expr.right().visit(*this);
+            }
             if (portSymbol) {
                 addLeaf(portSymbol, {rootRange, ConeSiteKind::Port});
+            }
+            // (A compound assignment reads the root, which its right side doesn't show.)
+            else if (!readsSignal && !expr.isCompound()) {
+                addConstant(expr.right());
             }
             for (const auto& [driver, sites] : conditionDrivers) {
                 for (const auto& site : sites) {
@@ -169,6 +256,8 @@ public:
 
     void handle(const slang::ast::ConditionalStatement& stmt) {
         ScopedRestore conditionDriversScope(conditionDrivers);
+        ScopedRestore underConditionScope(underCondition);
+        underCondition = true;
         {
             ScopedReset conditionScope(inCondition, true);
             for (const auto condition : stmt.conditions) {
@@ -183,6 +272,8 @@ public:
 
     void handle(const slang::ast::CaseStatement& stmt) {
         ScopedRestore conditionDriversScope(conditionDrivers);
+        ScopedRestore underConditionScope(underCondition);
+        underCondition = true;
         {
             ScopedReset conditionScope(inCondition, true);
             stmt.expr.visit(*this);
@@ -214,7 +305,11 @@ public:
                     port->internalSymbol == root) {
                     ScopedReset drivenScope(isDriven, true);
                     ScopedReset portConnectionScope(inPortConnection, true);
+                    ScopedReset readsScope(readsSignal);
                     expr->visit(*this);
+                    if (!readsSignal) {
+                        addConstant(*expr);
+                    }
                 }
                 else if (port->direction == slang::ast::ArgumentDirection::Out) {
                     ScopedReset portScope(portSymbol, port);
@@ -235,6 +330,8 @@ private:
     bool inCondition = false;
     // Whether visited value expressions are the connection of an input port.
     bool inPortConnection = false;
+    // Whether visited value expressions are copied whole to the assignment's target.
+    bool inWire = false;
     // Whether the current assignment is the connection of the root, which is an output port.
     bool inRootOutputConnection = false;
     // Where the root is read on the current data or control path.
@@ -244,10 +341,15 @@ private:
         if (inPortConnection) {
             return ConeSiteKind::Port;
         }
-        return inCondition ? ConeSiteKind::Control : ConeSiteKind::Data;
+        if (inCondition) {
+            return ConeSiteKind::Control;
+        }
+        return inWire ? ConeSiteKind::Wire : ConeSiteKind::Data;
     }
 
 public:
+    using ConeTracer::handle;
+
     void handle(const slang::ast::ValueExpressionBase& symbol) {
         if (isLhs) {
             if (inRootOutputConnection) {
@@ -264,7 +366,10 @@ public:
 
     void handle(const slang::ast::AssignmentExpression& expr) {
         ScopedRestore rootSitesScope(rootSites);
-        expr.right().visit(*this);
+        {
+            ScopedReset wireScope(inWire, isWire(expr));
+            expr.right().visit(*this);
+        }
         if (inRootOutputConnection || !rootSites.empty()) {
             ScopedReset lhsScope(isLhs, true);
             expr.left().visit(*this);
@@ -273,6 +378,8 @@ public:
 
     void handle(const slang::ast::ConditionalStatement& stmt) {
         ScopedRestore rootSitesScope(rootSites);
+        ScopedRestore underConditionScope(underCondition);
+        underCondition = true;
         {
             ScopedReset conditionScope(inCondition, true);
             for (const auto condition : stmt.conditions) {
@@ -287,6 +394,8 @@ public:
 
     void handle(const slang::ast::CaseStatement& stmt) {
         ScopedRestore rootSitesScope(rootSites);
+        ScopedRestore underConditionScope(underCondition);
+        underCondition = true;
         {
             ScopedReset conditionScope(inCondition, true);
             stmt.expr.visit(*this);

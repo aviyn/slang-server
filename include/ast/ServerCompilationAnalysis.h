@@ -48,10 +48,10 @@ public:
         const slang::ast::ValueSymbol& symbol);
 
     /// Get driver cone leaves for a given RTL path.
-    ConeLeaves getDriverCone(const std::string& path);
+    ConeTrace getDriverCone(const std::string& path);
 
     /// Get load cone leaves for a given RTL path.
-    ConeLeaves getLoadCone(const std::string& path);
+    ConeTrace getLoadCone(const std::string& path);
 
 private:
     /// Resolve an RTL path for cone tracing, throwing if it is not in the compiled design.

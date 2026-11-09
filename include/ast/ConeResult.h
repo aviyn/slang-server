@@ -25,7 +25,7 @@ struct ConeEntrySite {
     /// The use of the signal being traced from, in the assignment or port connection.
     lsp::Location location;
 
-    /// Either "data", "control" or "port".
+    /// One of "data", "wire", "control", "port" or "constant".
     std::string kind;
 };
 
@@ -45,12 +45,16 @@ struct ConeEntry {
 /// The source manager and compilation containing the leaves must outlive this result.
 class ConeResult {
 public:
-    /// Own the leaves and use the source manager to resolve their declaration locations.
-    ConeResult(ConeLeaves leaves, const slang::SourceManager& sourceManager) :
-        m_leaves(std::move(leaves)), m_sourceManager(sourceManager) {}
+    /// Own the trace and use the source manager to resolve its locations.
+    ConeResult(ConeTrace trace, const slang::SourceManager& sourceManager) :
+        m_leaves(std::move(trace.leaves)), m_constants(std::move(trace.constants)),
+        m_sourceManager(sourceManager) {}
 
     /// Return endpoints with valid declaration locations.
     std::vector<ConeEntry> getLocations() const;
+
+    /// Return where the traced signal is assigned a value that reads no signal, in source order.
+    std::vector<ConeEntrySite> getConstants() const;
 
     /// Return distinct hierarchical paths in the cone.
     std::vector<std::string> getPaths() const;
@@ -58,6 +62,9 @@ public:
 private:
     /// The unique symbol endpoints collected by tracing.
     ConeLeaves m_leaves;
+
+    /// The assignments that have no symbol endpoint.
+    std::set<ConeSite> m_constants;
 
     /// Source manager for the compilation containing the leaves.
     const slang::SourceManager& m_sourceManager;
