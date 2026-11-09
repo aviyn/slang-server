@@ -124,8 +124,8 @@ struct ConeTrace {
 };
 
 /// What the value of an expression comes from.
-struct ConeValueSources : public slang::ast::ASTVisitor<ConeValueSources,
-                                                        slang::ast::VisitFlags::AllGood> {
+struct ConeValueSources
+    : public slang::ast::ASTVisitor<ConeValueSources, slang::ast::VisitFlags::AllGood> {
     bool signal = false;
     bool call = false;
 
@@ -140,8 +140,8 @@ struct ConeValueSources : public slang::ast::ASTVisitor<ConeValueSources,
 };
 
 /// How many assignments in a block write each signal.
-struct ConeBlockWrites : public slang::ast::ASTVisitor<ConeBlockWrites,
-                                                       slang::ast::VisitFlags::AllGood> {
+struct ConeBlockWrites
+    : public slang::ast::ASTVisitor<ConeBlockWrites, slang::ast::VisitFlags::AllGood> {
     std::map<const slang::ast::Symbol*, int> counts;
 
     void handle(const slang::ast::AssignmentExpression& expr) {

@@ -96,10 +96,8 @@ public:
         std::string kind;
     };
     void checkConeSites(const std::string& command, const std::string& path,
-                        const std::string& endpoint,
-                        const std::vector<ExpectedConeSite>& expected);
-    void checkConeConstants(const std::string& path,
-                            const std::vector<ExpectedConeSite>& expected);
+                        const std::string& endpoint, const std::vector<ExpectedConeSite>& expected);
+    void checkConeConstants(const std::string& path, const std::vector<ExpectedConeSite>& expected);
     void checkSites(const std::vector<server::ConeEntrySite>& sites,
                     const std::vector<ExpectedConeSite>& expected);
 
