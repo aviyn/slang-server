@@ -467,6 +467,15 @@ endmodule
         server.checkConeSites(drivers, "top.padded_port.in", "top.bus", {{&bits, "port"}});
     }
 
+    SECTION("A clock loads only its own block") {
+        auto flop = doc.before("flop_q, cond_src");
+        auto resetFlop = doc.before("reset_flop, counted");
+        server.checkConeCommand(loads, "top.clk",
+                                {{"top.flop_q", &flop}, {"top.reset_flop", &resetFlop}});
+        auto second = doc.before("clk) begin");
+        server.checkConeSites(loads, "top.clk", "top.reset_flop", {{&second, "data"}});
+    }
+
     SECTION("An enum value isn't a wire") {
         auto member = doc.after("assign state = ");
         server.checkConeSites(drivers, "top.state", "top.state_e.IDLE", {{&member, "data"}});

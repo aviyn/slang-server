@@ -478,6 +478,12 @@ public:
         }
     }
 
+    // A block's event control clocks only that block's assignments.
+    void handle(const slang::ast::ProceduralBlockSymbol& symbol) {
+        ScopedRestore rootSitesScope(rootSites, {});
+        ConeTracer::handle(symbol);
+    }
+
     void handle(const slang::ast::AssignmentExpression& expr) {
         ScopedRestore rootSitesScope(rootSites);
         visitAssignedValue(expr);
